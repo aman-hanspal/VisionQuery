@@ -12,112 +12,141 @@ interface LiveOverlayProps {
   onDetections: (detections: Detection[]) => void;
 }
 
-export default function LiveOverlay({ classes, conf, sampleFps, onDetections }: LiveOverlayProps) {
+export default function LiveOverlay({
+  classes,
+  conf,
+  sampleFps,
+  onDetections,
+}: LiveOverlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
-  const genRef = useRef(0);
-  const activeRef = useRef(true);
-  const [status, setStatus] = useState<"starting" | "active" | "error">("starting");
-  const [detections, setDetections] = useState<Detection[]>([]);
-  const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
-
-  // Stable callback ref to avoid re-triggering the detection loop
+  const [status, setStatus] = useState<"starting" | "active" | "error">(
+    "starting",
+  );
+  const [cameraError, setCameraError] = useState("");
+  const [result, setResult] = useState<{
+    key: string;
+    detections: Detection[];
+    size: { w: number; h: number } | null;
+    error: string;
+  } | null>(null);
+  const queryKey = JSON.stringify([classes, conf]);
+  const valid =
+    classes.length > 0 &&
+    Number.isFinite(conf) &&
+    conf >= 0 &&
+    conf <= 1 &&
+    Number.isFinite(sampleFps) &&
+    sampleFps > 0 &&
+    sampleFps <= 240;
   const onDetectionsRef = useRef(onDetections);
-  onDetectionsRef.current = onDetections;
+  useEffect(() => {
+    onDetectionsRef.current = onDetections;
+  }, [onDetections]);
 
-  // Start webcam
   useEffect(() => {
     let stream: MediaStream | null = null;
-    activeRef.current = true;
-
+    let active = true;
+    const video = videoRef.current;
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        if (videoRef.current && activeRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {
-            // AbortError when play() is interrupted by unmount/remount (React strict mode)
-          });
-          setStatus("active");
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+        if (!active || !video) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
         }
-      } catch {
-        setStatus("error");
+        video.srcObject = stream;
+        await video.play();
+        if (active) setStatus("active");
+      } catch (error) {
+        stream?.getTracks().forEach((track) => track.stop());
+        if (active) {
+          setCameraError(
+            error instanceof Error ? error.message : String(error),
+          );
+          setStatus("error");
+        }
       }
     })();
-
     return () => {
-      activeRef.current = false;
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.srcObject = null;
+      active = false;
+      if (video) {
+        video.pause();
+        video.srcObject = null;
       }
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
+      stream?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
-  // Detection loop
   useEffect(() => {
-    if (status !== "active") return;
-    if (!classes.length) return;
-
-    const gen = ++genRef.current;
+    onDetectionsRef.current([]);
+    if (status !== "active" || !valid) return;
     let stopped = false;
-    const targetMs = Math.max(120, Math.round(1000 / (sampleFps || 1)));
-
+    let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController();
+    const targetMs = Math.max(120, 1000 / sampleFps);
     async function loop() {
-      while (!stopped && gen === genRef.current) {
+      const start = performance.now();
+      try {
         const video = videoRef.current;
-        if (!video || video.readyState < 2) {
-          await new Promise((r) => setTimeout(r, 100));
-          continue;
-        }
-
-        const start = performance.now();
-
-        // Capture frame
         const cap = captureRef.current;
-        if (!cap) break;
-        const maxW = 640;
-        const scale = Math.min(1, maxW / video.videoWidth);
-        const cw = Math.round(video.videoWidth * scale);
-        const ch = Math.round(video.videoHeight * scale);
-        cap.width = cw;
-        cap.height = ch;
-        const cctx = cap.getContext("2d");
-        if (!cctx) break;
-        cctx.drawImage(video, 0, 0, cw, ch);
-        const b64 = cap.toDataURL("image/jpeg", 0.6).split(",")[1];
-
-        try {
-          const data = await runLiveDetect({
-            image_b64: b64,
-            classes,
-            conf,
+        if (
+          !video ||
+          !cap ||
+          video.readyState < 2 ||
+          !video.videoWidth ||
+          !video.videoHeight
+        )
+          return;
+        const scale = Math.min(1, 640 / video.videoWidth);
+        cap.width = Math.max(1, Math.round(video.videoWidth * scale));
+        cap.height = Math.max(1, Math.round(video.videoHeight * scale));
+        const ctx = cap.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, cap.width, cap.height);
+        const image_b64 = cap.toDataURL("image/jpeg", 0.6).split(",")[1];
+        const data = await runLiveDetect(
+          { image_b64, classes, conf },
+          controller.signal,
+        );
+        if (!stopped) {
+          setResult({
+            key: queryKey,
+            detections: data.detections,
+            size: { w: data.frame_width, h: data.frame_height },
+            error: "",
           });
-          if (gen === genRef.current && !stopped) {
-            setDetections(data.detections || []);
-            setFrameSize({ w: data.frame_width, h: data.frame_height });
-            onDetectionsRef.current(data.detections || []);
-          }
-        } catch {
-          // Silently continue on network errors
+          onDetectionsRef.current(data.detections);
         }
-
-        const elapsed = performance.now() - start;
-        const wait = Math.max(20, targetMs - elapsed);
-        await new Promise((r) => setTimeout(r, wait));
+      } catch (error) {
+        if (!stopped) {
+          setResult({
+            key: queryKey,
+            detections: [],
+            size: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          onDetectionsRef.current([]);
+        }
+      } finally {
+        if (!stopped)
+          timer = setTimeout(
+            loop,
+            Math.max(100, targetMs - (performance.now() - start)),
+          );
       }
     }
-
-    loop();
-
+    void loop();
     return () => {
       stopped = true;
+      clearTimeout(timer);
+      controller.abort();
     };
-  }, [status, classes, conf, sampleFps]);
+  }, [status, valid, classes, conf, sampleFps, queryKey]);
 
   // Draw detections on canvas
   const drawDetections = useCallback(() => {
@@ -140,7 +169,15 @@ export default function LiveOverlay({ classes, conf, sampleFps, onDetections }: 
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cw, ch);
 
-    if (!frameSize || detections.length === 0) return;
+    if (
+      !valid ||
+      result?.key !== queryKey ||
+      !result.size ||
+      !result.detections.length
+    )
+      return;
+    const frameSize = result.size;
+    const detections = result.detections;
 
     const sx = cw / frameSize.w;
     const sy = ch / frameSize.h;
@@ -169,10 +206,13 @@ export default function LiveOverlay({ classes, conf, sampleFps, onDetections }: 
       ctx.fillStyle = "#fff";
       ctx.fillText(text, dx + 4, dy - 4);
     }
-  }, [detections, frameSize]);
+  }, [result, queryKey, valid]);
 
   useEffect(() => {
     drawDetections();
+    const observer = new ResizeObserver(drawDetections);
+    if (videoRef.current) observer.observe(videoRef.current);
+    return () => observer.disconnect();
   }, [drawDetections]);
 
   return (
@@ -190,7 +230,15 @@ export default function LiveOverlay({ classes, conf, sampleFps, onDetections }: 
       />
       <canvas ref={captureRef} className="hidden" />
       <div className="absolute top-2 left-2 px-2 py-1 rounded text-xs text-white bg-black/50">
-        {status === "error" ? "Webcam error" : status === "active" ? "Live detecting..." : "Starting..."}
+        {status === "error"
+          ? `Webcam error: ${cameraError}`
+          : status !== "active"
+            ? "Starting..."
+            : !valid
+              ? "Waiting for valid classes and settings..."
+              : result?.key === queryKey && result.error
+                ? `Detection error: ${result.error}`
+                : "Live detecting..."}
       </div>
     </div>
   );

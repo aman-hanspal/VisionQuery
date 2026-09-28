@@ -41,3 +41,17 @@ def test_live_detect_returns_shape(client, mock_model):
 def test_live_detect_invalid_image_returns_400(client):
     r = client.post("/live/detect", json={"image_b64": "not-valid-base64!!!", "classes": ["person"]})
     assert r.status_code == 400
+
+
+def test_zero_confidence_and_image_size_are_preserved(client, mock_model, mock_settings):
+    mock_settings.INFERENCE_IMAGE_SIZE = 320
+    response = client.post("/live/detect", json={"image_b64": _make_tiny_image_b64(), "classes": ["person"], "conf": 0})
+    assert response.status_code == 200
+    assert mock_model.predict.call_args.kwargs["conf"] == 0
+    assert mock_model.predict.call_args.kwargs["imgsz"] == 320
+
+
+def test_live_explicit_classes_are_normalized(client, mock_model):
+    response = client.post("/live/detect", json={"image_b64": _make_tiny_image_b64(), "classes": [" car ", "CAR"]})
+    assert response.json()["classes"] == ["car"]
+    mock_model.set_classes.assert_called_once_with(["car"])

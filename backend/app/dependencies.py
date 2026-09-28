@@ -3,12 +3,11 @@ from __future__ import annotations
 import threading
 
 from fastapi import Request
-from ultralytics import YOLOWorld
 
 from app.config import Settings
 
 
-def get_model(request: Request) -> YOLOWorld:
+def get_model(request: Request):
     return request.app.state.model
 
 

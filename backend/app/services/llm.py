@@ -6,25 +6,8 @@ from typing import Any
 
 
 def _heuristic_classes(prompt: str, *, max_classes: int = 10) -> list[str]:
-    parts = [p.strip() for p in (prompt or "").split(",")]
-    parts = [p for p in parts if p]
-    if parts:
-        return parts[:max_classes]
-
-    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9\- ]{1,32}", prompt or "")
-    cleaned: list[str] = []
-    for t in tokens:
-        t = " ".join(t.strip().split())
-        if not t:
-            continue
-        if len(t) > 40:
-            continue
-        if t.lower() in {"find", "show", "detect", "where", "is", "are", "the", "a", "an"}:
-            continue
-        cleaned.append(t)
-        if len(cleaned) >= max_classes:
-            break
-    return cleaned
+    # Offline mode is deliberately comma-separated object phrases, not an NLP parser.
+    return _normalize_classes((prompt or "").split(","), max_classes=max_classes)
 
 
 def _normalize_classes(items: Any, *, max_classes: int = 10) -> list[str]:
@@ -38,8 +21,6 @@ def _normalize_classes(items: Any, *, max_classes: int = 10) -> list[str]:
         if not s:
             continue
         out.append(s)
-        if len(out) >= max_classes:
-            break
     seen: set[str] = set()
     deduped: list[str] = []
     for s in out:
@@ -96,13 +77,14 @@ async def prompt_to_classes(
     except Exception:
         return _heuristic_classes(prompt, max_classes=max_classes)
 
-    content = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
+    try:
+        content = data["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError("Non-text class response")
+        content = content.strip()
+    except (KeyError, IndexError, TypeError, ValueError):
+        return _heuristic_classes(prompt, max_classes=max_classes)
 
-    content = content.strip()
     if not content:
         return _heuristic_classes(prompt, max_classes=max_classes)
 

@@ -1,130 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Vision Query - Setup Script
-# Works on macOS (Apple Silicon / Intel), Linux, and Windows WSL
+# macOS, Linux and Windows WSL. Native Windows: use the README commands.
+setup_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+command -v uv >/dev/null || { echo "Install uv before running setup."; exit 1; }
+command -v node >/dev/null || { echo "Install Node.js 22.12+ (or 20.19+) before running setup."; exit 1; }
+node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major >= 24)) { console.error("Use Node.js 22.12+ (or 20.19+)"); process.exit(1); }'
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+cd "$setup_root/backend"
+if [[ ! -d .venv ]]; then uv venv --python 3.12; fi
+uv pip install -r requirements.txt
+if [[ ! -f .env ]]; then cp .env.example .env; fi
 
-info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+cd "$setup_root/frontend"
+npm ci
+if [[ ! -f .env.local ]]; then cp .env.example .env.local; fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cat <<'INSTRUCTIONS'
+Setup complete. Configure backend/.env for your device.
+For NVIDIA, verify a CUDA-enabled PyTorch build is installed before setting DEVICE=cuda.
 
-# ---------- OS / Architecture Detection ----------
-OS="$(uname -s)"
-ARCH="$(uname -m)"
+Backend terminal:
+  cd backend
+  uv run --no-sync python -m uvicorn app.main:app --reload --port 8000
 
-info "Detected OS: $OS | Arch: $ARCH"
+Frontend terminal:
+  cd frontend
+  npm run dev
 
-if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
-  info "Apple Silicon / ARM64 detected — MPS acceleration available"
-fi
-
-# ---------- Python Check ----------
-PYTHON=""
-for cmd in python3 python; do
-  if command -v "$cmd" &>/dev/null; then
-    ver=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
-    major=$(echo "$ver" | cut -d. -f1)
-    minor=$(echo "$ver" | cut -d. -f2)
-    if [[ "$major" -ge 3 && "$minor" -ge 11 ]]; then
-      PYTHON="$cmd"
-      break
-    fi
-  fi
-done
-
-if [[ -z "$PYTHON" ]]; then
-  error "Python 3.11+ is required but not found.
-  Install it:
-    macOS:   brew install python@3.12
-    Ubuntu:  sudo apt install python3.12 python3.12-venv
-    WSL:     sudo apt install python3.12 python3.12-venv"
-fi
-
-info "Using Python: $($PYTHON --version)"
-
-# ---------- Node.js Check ----------
-if ! command -v node &>/dev/null; then
-  error "Node.js 20+ is required but not found.
-  Install it:
-    macOS:   brew install node
-    Ubuntu:  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs
-    WSL:     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
-fi
-
-NODE_VER=$(node --version | grep -oE '[0-9]+' | head -1)
-if [[ "$NODE_VER" -lt 20 ]]; then
-  error "Node.js 20+ required, found $(node --version).
-  Update: brew upgrade node (macOS) or install from nodesource"
-fi
-
-info "Using Node.js: $(node --version)"
-
-# ---------- Backend Setup ----------
-info "Setting up backend..."
-
-cd "$SCRIPT_DIR/backend"
-
-if [[ ! -d ".venv" ]]; then
-  $PYTHON -m venv .venv
-  info "Created Python virtual environment at backend/.venv"
-fi
-
-source .venv/bin/activate
-pip install -q -r requirements.txt
-info "Backend dependencies installed"
-
-# ---------- .env Template ----------
-if [[ ! -f ".env" ]]; then
-  cat > .env << 'ENVEOF'
-# Vision Query Backend Configuration
-# Uncomment and set your OpenRouter API key for LLM-powered class extraction
-# Without it, the app falls back to heuristic prompt parsing (still works)
-# OPENROUTER_API_KEY=sk-or-...
-
-# Device for YOLO inference: "mps" (Apple Silicon), "cuda" (NVIDIA), "cpu"
-# DEVICE=mps
-ENVEOF
-  info "Created backend/.env template — add your OPENROUTER_API_KEY if you have one"
-else
-  info "backend/.env already exists, skipping"
-fi
-
-# ---------- YOLO Weights ----------
-if [[ ! -f "yolov8m-worldv2.pt" ]]; then
-  info "YOLO weights not found — they will be downloaded automatically on first run (~57MB)"
-else
-  info "YOLO weights found: yolov8m-worldv2.pt"
-fi
-
-deactivate
-
-# ---------- Frontend Setup ----------
-info "Setting up frontend..."
-
-cd "$SCRIPT_DIR/frontend"
-npm install --silent
-info "Frontend dependencies installed"
-
-# ---------- Done ----------
-echo ""
-info "Setup complete!"
-echo ""
-echo "  To start the backend:"
-echo "    cd backend"
-echo "    source .venv/bin/activate"
-echo "    python -m uvicorn app.main:app --reload --port 8000"
-echo ""
-echo "  To start the frontend:"
-echo "    cd frontend"
-echo "    npm run dev"
-echo ""
-echo "  Then open http://localhost:3000"
-echo ""
+Open http://localhost:3000
+INSTRUCTIONS

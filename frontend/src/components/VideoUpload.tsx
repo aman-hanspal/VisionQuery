@@ -6,7 +6,11 @@ interface VideoUploadProps {
   videoId: string;
 }
 
-export default function VideoUpload({ onUpload, busy, videoId }: VideoUploadProps) {
+export default function VideoUpload({
+  onUpload,
+  busy,
+  videoId,
+}: VideoUploadProps) {
   return (
     <div className="card">
       <div className="font-bold mb-2">Upload</div>
@@ -16,7 +20,8 @@ export default function VideoUpload({ onUpload, busy, videoId }: VideoUploadProp
           accept="video/*"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) onUpload(f);
+            if (f) void onUpload(f);
+            e.target.value = "";
           }}
           disabled={busy}
           className="input-field"

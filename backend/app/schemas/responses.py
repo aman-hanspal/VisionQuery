@@ -20,6 +20,8 @@ class Detection(BaseModel):
 
 class QueryResponse(BaseModel):
     detections: list[Detection]
+    classes: list[str]
+    metadata: dict[str, object]
 
 
 class ClassesResponse(BaseModel):

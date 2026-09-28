@@ -7,14 +7,24 @@ import type {
   UploadResponse,
 } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+const API_BASE = (
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"
+).replace(/\/$/, "");
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let msg = `Request failed: ${res.status}`;
     try {
       const data = await res.json();
-      msg = data?.detail || msg;
+      if (typeof data?.detail === "string") msg = data.detail;
+      else if (Array.isArray(data?.detail)) {
+        msg = data.detail
+          .map(
+            (item: { loc?: string[]; msg?: string }) =>
+              `${item.loc?.join(".") ?? "Input"}: ${item.msg ?? "Invalid value"}`,
+          )
+          .join("; ");
+      }
     } catch {
       // ignore
     }
@@ -39,7 +49,7 @@ export async function uploadVideo(file: File): Promise<UploadResponse> {
 
 export async function resolveClasses(
   prompt: string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal } = {},
 ): Promise<ClassesResponse> {
   const res = await fetch(`${API_BASE}/classes`, {
     method: "POST",
@@ -59,8 +69,12 @@ export async function runQuery(req: QueryRequest): Promise<QueryResponse> {
   return jsonOrThrow<QueryResponse>(res);
 }
 
-export async function runLiveDetect(req: LiveDetectRequest): Promise<LiveDetectResponse> {
+export async function runLiveDetect(
+  req: LiveDetectRequest,
+  signal?: AbortSignal,
+): Promise<LiveDetectResponse> {
   const res = await fetch(`${API_BASE}/live/detect`, {
+    signal,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),

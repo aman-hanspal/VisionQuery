@@ -214,8 +214,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.next/
 frontend-old/
-backend/storage/videos/
+backend/storage/
 backend/.venv/
 *.mp4
 *.pt
 .gstack/
+
+# Local typecheck cache
+*.tsbuildinfo

@@ -1,49 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { resolveClasses } from "@/lib/api";
 
+const EMPTY: string[] = [];
+
 export function useClasses(prompt: string) {
-  const [promptClasses, setPromptClasses] = useState<string[]>([]);
-  const [classesBusy, setClassesBusy] = useState(false);
+  const query = prompt.trim();
+  const [attempt, setAttempt] = useState(0);
+  const [resolved, setResolved] = useState<{
+    query: string;
+    attempt: number;
+    classes: string[];
+    error: string;
+  } | null>(null);
 
   useEffect(() => {
-    const p = (prompt || "").trim();
-    if (!p) {
-      setPromptClasses([]);
-      return;
-    }
-
+    if (!query) return;
+    let active = true;
     const controller = new AbortController();
-    setClassesBusy(true);
-
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       try {
-        const data = await resolveClasses(p, { signal: controller.signal });
-        const classes = Array.isArray(data?.classes) ? data.classes : [];
-        setPromptClasses(classes);
-      } catch {
-        setPromptClasses([]);
-      } finally {
-        setClassesBusy(false);
+        const data = await resolveClasses(query, { signal: controller.signal });
+        if (active)
+          setResolved({ query, attempt, classes: data.classes, error: "" });
+      } catch (error) {
+        if (active)
+          setResolved({
+            query,
+            attempt,
+            classes: [],
+            error: error instanceof Error ? error.message : String(error),
+          });
       }
     }, 450);
-
     return () => {
+      active = false;
       controller.abort();
-      clearTimeout(t);
+      clearTimeout(timer);
     };
-  }, [prompt]);
+  }, [query, attempt]);
 
-  // Fallback: if no LLM classes, comma-split the prompt
-  const displayClasses =
-    promptClasses.length > 0
-      ? promptClasses
-      : (prompt || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .slice(0, 10);
-
-  return { promptClasses, displayClasses, classesBusy };
+  // Gate by exact query during render, including the render before effect cleanup.
+  const current =
+    resolved?.query === query && resolved.attempt === attempt ? resolved : null;
+  const promptClasses = query ? (current?.classes ?? EMPTY) : EMPTY;
+  const classesBusy = Boolean(query && !current);
+  const displayClasses = useMemo(() => promptClasses, [promptClasses]);
+  return {
+    promptClasses,
+    displayClasses,
+    classesBusy,
+    classesError: current?.error ?? "",
+    retryClasses: () => setAttempt((value) => value + 1),
+  };
 }

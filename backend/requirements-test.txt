@@ -1,0 +1,9 @@
+# API and sampling tests deliberately do not install torch or Ultralytics.
+fastapi>=0.115.0
+python-multipart>=0.0.18
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+httpx>=0.28.0
+pydantic-settings>=2.7.0
+pytest>=8.3.0
+ruff>=0.8.0

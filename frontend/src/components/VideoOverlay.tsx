@@ -1,17 +1,29 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+} from "react";
 import type { Detection } from "@/lib/types";
+import { indexDetections, nearestSample } from "@/lib/overlays";
 import { getDpr, labelColor } from "@/lib/utils";
 
 interface VideoOverlayProps {
   videoSrc: string;
   detections: Detection[];
   fps: number;
+  selectedTimestamps?: number[];
 }
 
 export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
-  function VideoOverlay({ videoSrc, detections, fps }, ref) {
+  function VideoOverlay(
+    { videoSrc, detections, fps, selectedTimestamps },
+    ref,
+  ) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const wrapRef = useRef<HTMLDivElement>(null);
@@ -19,44 +31,18 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
 
     useImperativeHandle(ref, () => videoRef.current!, []);
 
-    // Index detections into 100ms buckets for fast lookup
-    const detIndex = useMemo(() => {
-      const idx = new Map<number, Detection[]>();
-      for (const d of detections) {
-        if (d.t == null) continue;
-        const key = Math.round((d.t ?? 0) * 10);
-        const arr = idx.get(key) || [];
-        arr.push(d);
-        idx.set(key, arr);
-      }
-      // Sort each bucket by confidence descending
-      for (const arr of idx.values()) {
-        arr.sort((a, b) => b.conf - a.conf);
-      }
-      return idx;
-    }, [detections]);
-
-    const tolerance = useMemo(() => Math.max(0.25, 0.75 / (fps || 1)), [fps]);
-
+    const detIndex = useMemo(() => indexDetections(detections), [detections]);
+    const sampleTimes = useMemo(
+      () => selectedTimestamps ?? [...detIndex.keys()].sort((a, b) => a - b),
+      [selectedTimestamps, detIndex],
+    );
+    const tolerance = Math.min(0.25, 0.5 / (fps || 1));
     const getActive = useCallback(
-      (currentTime: number) => {
-        const out: Detection[] = [];
-        const lo = Math.round((currentTime - tolerance) * 10);
-        const hi = Math.round((currentTime + tolerance) * 10);
-        for (let k = lo; k <= hi; k++) {
-          const bucket = detIndex.get(k);
-          if (bucket) {
-            for (const d of bucket) {
-              if ((d.t ?? 0) >= currentTime - tolerance && (d.t ?? 0) <= currentTime + tolerance) {
-                out.push(d);
-              }
-            }
-          }
-        }
-        out.sort((a, b) => b.conf - a.conf);
-        return out.slice(0, 10);
+      (time: number) => {
+        const t = nearestSample(sampleTimes, time, tolerance);
+        return t === null ? [] : (detIndex.get(t) ?? []);
       },
-      [detIndex, tolerance]
+      [detIndex, sampleTimes, tolerance],
     );
 
     const draw = useCallback(() => {
@@ -115,15 +101,14 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
       }
     }, [getActive]);
 
-    const animLoop = useCallback(() => {
-      draw();
-      rafRef.current = requestAnimationFrame(animLoop);
-    }, [draw]);
-
     useEffect(() => {
       const video = videoRef.current;
       if (!video) return;
 
+      const animLoop = () => {
+        draw();
+        rafRef.current = requestAnimationFrame(animLoop);
+      };
       const onPlay = () => {
         cancelAnimationFrame(rafRef.current);
         animLoop();
@@ -132,6 +117,9 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
       const onSeeked = () => draw();
       const onLoaded = () => draw();
 
+      const observer = new ResizeObserver(draw);
+      observer.observe(video);
+      if (!video.paused) onPlay();
       video.addEventListener("play", onPlay);
       video.addEventListener("pause", onPause);
       video.addEventListener("ended", onPause);
@@ -139,6 +127,7 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
       video.addEventListener("loadedmetadata", onLoaded);
 
       return () => {
+        observer.disconnect();
         cancelAnimationFrame(rafRef.current);
         video.removeEventListener("play", onPlay);
         video.removeEventListener("pause", onPause);
@@ -146,7 +135,7 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
         video.removeEventListener("seeked", onSeeked);
         video.removeEventListener("loadedmetadata", onLoaded);
       };
-    }, [animLoop, draw]);
+    }, [draw]);
 
     // Redraw when detections change
     useEffect(() => {
@@ -169,5 +158,5 @@ export const VideoOverlay = forwardRef<HTMLVideoElement, VideoOverlayProps>(
         />
       </div>
     );
-  }
+  },
 );

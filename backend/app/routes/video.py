@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from app.config import Settings
 from app.dependencies import get_settings
-from app.services.video import save_upload, video_exists
+from app.services.video import MEDIA_TYPES, save_upload, video_exists
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ async def upload(
     from pathlib import Path
 
     storage = Path(settings.STORAGE_DIR)
-    video_id = await save_upload(file, storage_dir=storage)
+    video_id = await save_upload(file, storage_dir=storage, max_bytes=settings.MAX_UPLOAD_BYTES)
     return {"video_id": video_id}
 
 
@@ -31,4 +31,4 @@ def get_video(
 
     storage = Path(settings.STORAGE_DIR)
     path = video_exists(video_id, storage_dir=storage)
-    return FileResponse(path, media_type="video/mp4", filename=f"{video_id}.mp4")
+    return FileResponse(path, media_type=MEDIA_TYPES[path.suffix], content_disposition_type="inline")
